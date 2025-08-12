@@ -9,6 +9,7 @@ load_dotenv()
 
 app = Flask(__name__)
 transcript_queue = Queue()
+status_queue = Queue()
 
 AUTH_HEADER = {
     'Authorization': f"App {os.getenv('API_KEY')}",
@@ -21,25 +22,25 @@ calls_config_id = os.getenv('CALLS_CONFIG_ID')
 webhook_url = os.getenv('NGROK_URL')
 
 @app.route('/webhook', methods=['POST'])
-def webhook(phone_A):
+def webhook():
     ev = request.json
     ev_type = ev.get("type")
     payload = ev.get("payload", {})
-    if ev_type == "CALL_ESTABLISHED":
-        call_id = payload.get("callId")
-        if payload.get("direction") == "OUTBOUND" and payload.get("parentCallId") is None:
-            data = {
-                "parentCallId": call_id,
-                "destination": {
-                    "type": "PHONE",
-                    "phoneNumber": phone_A
-                }
-            }
-            resp = requests.post(f"{BASE_URL}/calls/{calls_config_id}/calls/call-legs/call/connect-with-new-call", json=data, headers=AUTH_HEADER)
+    call_id = payload.get("callId")
 
+    if ev_type == "CALL RINGING":
+        status_queue.put("Ringing...")
+    elif ev_type == "CALL ESTABLISHED":
+        status_queue.put("Call connected")
+        start_transcription(call_id)
+    elif ev_type == "CALL FINISHED":
+        status_queue.put("Call ended")
+    elif ev_type == "CALL FAILED":
+        status_queue.put("Call failed")
     elif ev_type == "TRANSCRIPTION_RESULT":
-        text = payload.get("transcript", {}).get("text", "")
-        transcript_queue.put(text)
+        text = payload.get("transcript", {}).get ("text", "")
+        if text:
+            transcript_queue.put(text)
     return ('', 200)
 
 def start_transcription(call_id):
@@ -53,12 +54,8 @@ def bridge_call(phone_A, phone_B):
         "to": phone_B,
         "callbackData": "call1"
     }
-
-    resp = requests.post(f"{BASE_URL}/calls/{calls_config_id}/calls", json=data, headers=AUTH_HEADER)
-    call = resp.json()
-    call_id = call.get("callId")
-
-    return call_id
+    resp = requests.post(f"{BASE_URL}/{calls_config_id}/calls", json=data, headers=AUTH_HEADER)
+    return resp.json().get("callId")
 
 if __name__ == '__main__':
     threading.Thread(target = lambda: app.run(host='0.0.0.0', port=5000), daemon=True).start()

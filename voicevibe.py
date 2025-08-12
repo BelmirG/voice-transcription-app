@@ -5,7 +5,7 @@ from kivy.uix.button import Button
 from kivy.uix.textinput import TextInput
 import os
 import threading
-from webhook_server import transcript_queue, bridge_call, start_transcription
+from webhook_server import transcript_queue, bridge_call, start_transcription, status_queue 
 import requests
 import http.client
 import json
@@ -17,7 +17,6 @@ load_dotenv()
 class VoiceApp(App):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self.transcript = "Waiting for transcription..."
         self.call_id = None
 
     def build(self):
@@ -28,36 +27,39 @@ class VoiceApp(App):
         layout.add_widget(self.inputA)
         layout.add_widget(self.inputB)
         self.status = Label(text='Waiting...', size_hint=(1, 0.5))
+        self.transcription_label = Label(text='Transcription will appear here!', size_hint=(1, 0.5))
         layout.add_widget(Button(text='Start Call', on_press=self.initiate_call))
         layout.add_widget(self.status)
+        layout.add_widget(self.transcription_label)
         return layout
 
     def initiate_call(self, instance):
-        import webhook_server
-        webhook_server.calls_config_id = os.getenv('CALLS_CONFIG_ID')
-        webhook_server.AUTH_HEADER["Authorization"] = f"App {os.getenv('API_KEY')}"
-        webhook_server.BASE_URL = "https://api.infobip.com/calls/1"
-        
         phone_A = self.inputA.text.strip()
         phone_B = self.inputB.text.strip()
-        def bridge_ui():
-            return webhook_server.bridge_call(phone_A, phone_B)
-        
-        webhook_server.bridge_call = bridge_ui
 
-        threading.Thread(target=self.call_flow, daemon=True).start()
+        threading.Thread(target=lambda: self.call_flow(phone_A, phone_B), daemon=True).start()
+        threading.Thread(target=self.poll_status, daemon=True).start()
         threading.Thread(target=self.poll_transcript, daemon=True).start()
 
-    def call_flow(self):
-        call_id = bridge_call()
-        time.sleep(2)
-        start_transcription(call_id)
+    def call_flow(self, phone_A, phone_B):
+        call_id = bridge_call(phone_A, phone_B)
+        if call_id:
+            time.sleep(2)
+            start_transcription(call_id)
+
+    def poll_status(self):
+        while True:
+            try:
+                text = status_queue.get(timeout=300)
+                self.status.text = text
+            except:
+                break
 
     def poll_transcript(self):
         while True:
             try:
-                text = transcript_queue.get(timeout=120)
-                self.status.text = text
+                text = transcript_queue.get(timeout=600)
+                self.transcription_label.text = text
             except:
                 self.status.text = "Transcription timeout or it ended."
                 break 
